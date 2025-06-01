@@ -1,0 +1,168 @@
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef BUILD_WITH_OPENMPI
+#include <mpi.h>
+#endif
+
+#include "cell_board.h"
+#include "aux.h"
+
+using namespace Nix;
+
+#ifdef BUILD_WITH_OPENMPI
+int main(int argc, char* argv[]) {
+    // Initialize MPI Environment.
+    MPI_Init(nullptr, nullptr);
+
+    // Get MPI Process Informations.
+    int num_proc, proc_id;
+    MPI_Comm_size(MPI_COMM_WORLD, &num_proc);
+    MPI_Comm_rank(MPI_COMM_WORLD, &proc_id);
+
+    // Get Program Arguments by standard input stream.
+    // ※ Note : By default, standard input of an MPI program is 
+    //           only processed in Process ID 0. 
+    uint board_size, target_gen, ghost_size;
+    std::cin >> board_size;
+    std::cin >> target_gen;
+    std::cin >> ghost_size;
+
+    char **init_cell_board = new char*[board_size];
+    for (uint i = 0; i < board_size; i++) {
+        init_cell_board[i] = new char[board_size];
+        scanf("%s", init_cell_board[i]);
+    }
+
+    // Spread Program Arguments (except initial cell-board status)
+    MPI_Bcast(&board_size, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&target_gen, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&ghost_size, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+
+#if defined(CARTESIAN_PARTITION)
+#ifdef ROWWISE_PARTITION
+#error CARTESIAN_PARTITION and ROWWISE_PARTITION cannot be defined at once.
+#endif
+    
+    // Construct 2D-Mesh Topology
+    int cart_dims[2], cart_coords[2];
+    int cart_periods[2] = {0, 0}; // 2D-Mesh Topology
+    compute_cart_dims(cart_dims, num_proc);
+    
+    MPI_Comm cartesian_topology;
+    MPI_Cart_create(MPI_COMM_WORLD, 2, cart_dims, cart_periods, 0, &cartesian_topology);
+    MPI_Cart_coords(cartesian_topology, proc_id, 2, cart_coords);
+//  compute_cart_coords(cart_coords, proc_id, cart_dims);
+    
+    // Spread initial cell-board status
+    uint cell_base[2], cell_size[2];
+    compute_cart_cell_info(cell_base, cell_size, cart_dims, cart_coords, board_size);
+    #ifdef DEBUG
+    printf("Process ID %d : Dim(%d, %d), Coord(%d, %d), Base(%d, %d), Size(%d, %d)\n",
+            proc_id, cart_dims[0], cart_dims[1], cart_coords[0], cart_coords[1],
+            cell_base[0], cell_base[1], cell_size[0], cell_size[1]);
+    #endif
+    
+    char **my_init_cell_board = new char*[cell_size[0]];
+    for (uint i = 0; i < cell_size[0]; i++)
+        my_init_cell_board[i] = new char[cell_size[1]];
+    
+    if (proc_id == 0) {
+        for (int i = 1; i < num_proc; i++) {
+            int dest_cart_coords[2];
+            uint dest_cell_base[2], dest_cell_size[2];
+            MPI_Cart_coords(cartesian_topology, i, 2, dest_cart_coords);
+            // compute_cart_coords(dest_cart_coords, i, cart_dims);
+            compute_cart_cell_info(dest_cell_base, dest_cell_size, cart_dims, 
+                                   dest_cart_coords, board_size);
+            
+            uint row_base = dest_cell_base[0]; uint col_base = dest_cell_base[1];
+            uint row_cnt  = dest_cell_size[0]; uint col_cnt  = dest_cell_size[1];
+            printf("Process 0 : Sending init_cell_board[%d][%d] ~ init_cell_board[%d][%d] to Process %d...\n",
+                    row_base, col_base, row_base+row_cnt-1, col_base+col_cnt-1, i);
+            for (int j = 0; j < row_cnt; j++) {
+                MPI_Send(&init_cell_board[row_base+j][col_base], col_cnt,
+                          MPI_CHAR, i, j, cartesian_topology);//, &req[i-1][j]);
+            }
+            printf("Process 0 : Sent to Process %d\n", i);
+        }
+        // for (int i = 0; i < cell_size[0]; i++)
+        //     for (int j = 0; j < cell_size[1]; j++)
+        //         my_init_cell_board[i][j] = init_cell_board[i][j];
+    } else {
+        uint row_base = cell_base[0]; uint col_base = cell_base[1];
+        uint row_cnt  = cell_size[0]; uint col_cnt  = cell_size[1];
+        printf("Process %d : Receiving init_cell_board[%d][%d] ~ init_cell_board[%d][%d] from Process 0...\n",
+                proc_id, row_base, col_base, row_base+row_cnt-1, col_base+col_cnt-1);
+        for (int j = 0; j < row_cnt; j++) {
+            MPI_Recv(&my_init_cell_board[j][0], col_cnt, MPI_CHAR, 
+                     0, j, cartesian_topology, MPI_STATUS_IGNORE);
+        }
+        printf("Process %d : Received from Process 0\n", proc_id);
+    }
+    
+
+    // // for (int i = 0; i < num_proc-1; i++) {
+    // //     uint row_cnt = ((board_size * (i+1)) / cart_dims[0]) - ((board_size * i) / cart_dims[0]);
+    // //     MPI_Status *stat = new MPI_Status[row_cnt];
+    // //     MPI_Waitall(row_cnt, req[i], stat);
+    // //     delete[] stat;
+    // // }
+
+    // DEBUG
+    std::string text_str = "input_partition" + std::to_string(proc_id) + ".txt";
+    FILE *input_partition = fopen(text_str.c_str(), "w");
+    fprintf(input_partition, "Process ID : %d\n", proc_id);
+    fprintf(input_partition, "Cartesian Coordinate : (%d, %d)\n", cart_coords[0], cart_coords[1]);
+    fprintf(input_partition, "Cell Base : (%d, %d)\n", cell_base[0], cell_base[1]);
+    fprintf(input_partition, "Cell Size : (%d, %d)\n", cell_size[0], cell_size[1]);
+    fprintf(input_partition, "Board Input :\n");
+    for (int i=0; i<cell_size[0]; i++){
+        for (int j=0; j<cell_size[1]; j++)
+            fprintf(input_partition, "%c", my_init_cell_board[i][j]);
+        fprintf(input_partition, "\n");
+    }
+    
+    // CartesianCellBoard cell_board(cell_size, my_init_cell_board);
+
+#elif defined(ROWWISE_PARTITION)
+#ifdef CARTESIAN_PARTITION
+#error CARTESIAN_PARTITION and ROWWISE_PARTITION cannot be defined at once.
+#endif
+    // Construct 1D Mesh Topology
+
+#else
+#error Define CARTESIAN_PARTITION or ROWWISE_PARTITION.
+#endif
+
+    MPI_Finalize();
+}
+#else
+int main(int argc, char* argv[]) {
+    uint board_size, target_gen, ghost_size;
+    #ifdef DEBUG
+    single_input_prompt("Enter the size of (square) board", board_size);
+    single_input_prompt("Enter the final generation to display", target_gen);
+    single_input_prompt("Enter the size of ghost cell", ghost_size);
+    #else
+    std::cin >> board_size;
+    std::cin >> target_gen;
+    std::cin >> ghost_size;
+    #endif
+    char **init_cell_board = new char*[board_size];
+    for (uint i = 0; i < board_size; i++)
+        init_cell_board[i] = new char[board_size];
+    #ifdef DEBUG
+    cell_board_input_prompt("Enter the initial cell-board status (# : Alive, . : Dead)",
+                           init_cell_board, board_size);
+    #else
+    for (uint i = 0; i < board_size; i++) {
+        scanf("%s", init_cell_board[i]);
+    }
+    #endif
+
+    CellBoard cell_board(board_size, board_size, init_cell_board);
+    for (int i = 0; i < target_gen; i++)
+        cell_board.cycle();
+    cell_board.print();
+}
+#endif
