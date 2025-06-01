@@ -12,7 +12,7 @@ using namespace Nix;
 #ifdef BUILD_WITH_OPENMPI
 int main(int argc, char* argv[]) {
     // Initialize MPI Environment.
-    MPI_Init(nullptr, nullptr);
+    MPI_Init(&argc, &argv);
 
     // Get MPI Process Informations.
     int num_proc, proc_id;
@@ -23,20 +23,45 @@ int main(int argc, char* argv[]) {
     // ※ Note : By default, standard input of an MPI program is 
     //           only processed in Process ID 0. 
     uint board_size, target_gen, ghost_size;
-    std::cin >> board_size;
-    std::cin >> target_gen;
-    std::cin >> ghost_size;
-
-    char **init_cell_board = new char*[board_size];
-    for (uint i = 0; i < board_size; i++) {
-        init_cell_board[i] = new char[board_size];
-        scanf("%s", init_cell_board[i]);
+    if (proc_id == 0) {
+        std::cin >> board_size;
+        std::cin >> target_gen;
+        std::cin >> ghost_size;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
 
     // Spread Program Arguments (except initial cell-board status)
     MPI_Bcast(&board_size, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
     MPI_Bcast(&target_gen, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
     MPI_Bcast(&ghost_size, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+    
+    char *init_cell_board;
+    if (proc_id == 0) {
+        init_cell_board = new char[board_size * board_size];
+    }
+
+    if (proc_id == 0) {
+        for (int i = 0; i < board_size; i++) {
+            std::string line;
+            std::getline(std::cin, line);
+            if (line.length() != board_size) {
+                std::cerr << "Error: Line " << i << " has length " << line.length() 
+                          << ", expected " << board_size << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            for (int j = 0; j < board_size; j++) {
+                init_cell_board[i * board_size + j] = line[j];
+            }
+        }
+    }
+    
+    if (proc_id == 0) {
+        for (int i = 0; i < board_size; i++) {
+            for (int j = 0; j < board_size; j++)
+                std::cout << init_cell_board[i*board_size+j];
+            std::cout << "\n";
+        }
+    }
 
 #if defined(CARTESIAN_PARTITION)
 #ifdef ROWWISE_PARTITION
@@ -56,11 +81,11 @@ int main(int argc, char* argv[]) {
     // Spread initial cell-board status
     uint cell_base[2], cell_size[2];
     compute_cart_cell_info(cell_base, cell_size, cart_dims, cart_coords, board_size);
-    #ifdef DEBUG
+    // #ifdef DEBUG
     printf("Process ID %d : Dim(%d, %d), Coord(%d, %d), Base(%d, %d), Size(%d, %d)\n",
             proc_id, cart_dims[0], cart_dims[1], cart_coords[0], cart_coords[1],
             cell_base[0], cell_base[1], cell_size[0], cell_size[1]);
-    #endif
+    // #endif
     
     char **my_init_cell_board = new char*[cell_size[0]];
     for (uint i = 0; i < cell_size[0]; i++)
@@ -85,9 +110,9 @@ int main(int argc, char* argv[]) {
             }
             printf("Process 0 : Sent to Process %d\n", i);
         }
-        // for (int i = 0; i < cell_size[0]; i++)
-        //     for (int j = 0; j < cell_size[1]; j++)
-        //         my_init_cell_board[i][j] = init_cell_board[i][j];
+        for (int i = 0; i < cell_size[0]; i++)
+            for (int j = 0; j < cell_size[1]; j++)
+                my_init_cell_board[i][j] = init_cell_board[i][j];
     } else {
         uint row_base = cell_base[0]; uint col_base = cell_base[1];
         uint row_cnt  = cell_size[0]; uint col_cnt  = cell_size[1];
@@ -99,16 +124,14 @@ int main(int argc, char* argv[]) {
         }
         printf("Process %d : Received from Process 0\n", proc_id);
     }
-    
 
-    // // for (int i = 0; i < num_proc-1; i++) {
-    // //     uint row_cnt = ((board_size * (i+1)) / cart_dims[0]) - ((board_size * i) / cart_dims[0]);
-    // //     MPI_Status *stat = new MPI_Status[row_cnt];
-    // //     MPI_Waitall(row_cnt, req[i], stat);
-    // //     delete[] stat;
-    // // }
+    if (proc_id == 0) {
+        for (int i = 0; i < board_size; i++)
+            delete[] init_cell_board[i];
+        delete[] init_cell_board;
+    }
 
-    // DEBUG
+//#ifdef DEBUG
     std::string text_str = "input_partition" + std::to_string(proc_id) + ".txt";
     FILE *input_partition = fopen(text_str.c_str(), "w");
     fprintf(input_partition, "Process ID : %d\n", proc_id);
@@ -116,13 +139,71 @@ int main(int argc, char* argv[]) {
     fprintf(input_partition, "Cell Base : (%d, %d)\n", cell_base[0], cell_base[1]);
     fprintf(input_partition, "Cell Size : (%d, %d)\n", cell_size[0], cell_size[1]);
     fprintf(input_partition, "Board Input :\n");
-    for (int i=0; i<cell_size[0]; i++){
-        for (int j=0; j<cell_size[1]; j++)
+    for (int i = 0; i < cell_size[0]; i++){
+        for (int j = 0; j < cell_size[1]; j++)
             fprintf(input_partition, "%c", my_init_cell_board[i][j]);
         fprintf(input_partition, "\n");
     }
+//#endif
+
+    // Run Game-of-Life Game
+    // CartesianCellBoard my_cell_board(proc_id, cell_base, cell_size, ghost_size,
+    //                                  my_init_cell_board, &cartesian_topology);
+    // for (int i = 0; i < target_gen; i++) {
+    //     my_cell_board.cycle();
+    // }
+
+    // Gather results
+    // bool **final_cell_board = new bool*[board_size];
+    // for (uint i = 0; i < board_size; i++)
+    //     final_cell_board[i] = new bool[board_size];
     
-    // CartesianCellBoard cell_board(cell_size, my_init_cell_board);
+    // bool **my_final_cell_board = my_cell_board.get_board_status();
+    
+    // if (proc_id == 0) {
+    //     for (int i = 1; i < num_proc; i++) {
+    //         int dest_cart_coords[2];
+    //         uint dest_cell_base[2], dest_cell_size[2];
+    //         MPI_Cart_coords(cartesian_topology, i, 2, dest_cart_coords);
+    //         compute_cart_cell_info(dest_cell_base, dest_cell_size, cart_dims, 
+    //                                dest_cart_coords, board_size);
+            
+    //         uint row_base = dest_cell_base[0]; uint col_base = dest_cell_base[1];
+    //         uint row_cnt  = dest_cell_size[0]; uint col_cnt  = dest_cell_size[1];
+    //         printf("Process 0 : Receiving final_cell_board[%d][%d] ~ final_cell_board[%d][%d] from Process %d...\n",
+    //                 row_base, col_base, row_base+row_cnt-1, col_base+col_cnt-1, i);
+    //         for (int j = 0; j < row_cnt; j++) {
+    //             MPI_Recv(&final_cell_board[row_base+j][col_base], col_cnt, MPI_CHAR,
+    //                      i, j, cartesian_topology, MPI_STATUS_IGNORE);
+    //         }
+    //         printf("Process 0 : Received from Process %d\n", i);
+    //     }
+    //     for (int i = 0; i < cell_size[0]; i++) {
+    //         for (int j = 0; j < cell_size[1]; j++)
+    //             final_cell_board[i][j] = my_final_cell_board[i+ghost_size][j+ghost_size];
+    //     }
+        
+    // } else {
+    //     uint row_base = cell_base[0]; uint col_base = cell_base[1];
+    //     uint row_cnt  = cell_size[0]; uint col_cnt  = cell_size[1];
+    //     printf("Process %d : Sending final_cell_board[%d][%d] ~ final_cell_board[%d][%d] from Process 0...\n",
+    //             proc_id, row_base, col_base, row_base+row_cnt-1, col_base+col_cnt-1);
+    //     for (int j = 0; j < row_cnt; j++) {
+    //         MPI_Send(&my_init_cell_board[ghost_size][ghost_size], col_cnt, MPI_CHAR, 
+    //                  0, j, cartesian_topology);
+    //     }
+    //     printf("Process %d : Sent to Process 0\n", proc_id);
+    // }
+
+    // if (proc_id == 0) {
+    //     for (int i = 0; i < board_size; i++) {
+    //         for (int j = 0; j < board_size; j++) {
+    //             char c = final_cell_board[i][j] ? '#' : '.';
+    //             std::cout << c;
+    //         }
+    //         std::cout << "\n";
+    //     }
+    // }
 
 #elif defined(ROWWISE_PARTITION)
 #ifdef CARTESIAN_PARTITION
@@ -131,7 +212,7 @@ int main(int argc, char* argv[]) {
     // Construct 1D Mesh Topology
 
 #else
-#error Define CARTESIAN_PARTITION or ROWWISE_PARTITION.
+// #error Define CARTESIAN_PARTITION or ROWWISE_PARTITION.
 #endif
 
     MPI_Finalize();
@@ -164,5 +245,9 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < target_gen; i++)
         cell_board.cycle();
     cell_board.print();
+
+    for (uint i = 0; i < board_size; i++)
+        delete[] init_cell_board[i];
+    delete[] init_cell_board;
 }
 #endif

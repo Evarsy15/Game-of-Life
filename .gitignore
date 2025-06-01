@@ -1,2 +1,9 @@
 my_sample/*
-
+core.*
+conway_single
+conway_2d_mesh
+conway_1d_mesh
+mini_project_3.tar.gz
+mpi_hello_world
+mpi_hello_world.cc
+*.txt
