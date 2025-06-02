@@ -97,14 +97,23 @@ void CellBoard::print() {
 CartesianCellBoard::CartesianCellBoard(uint proc_id,
                                        uint cell_base[],
                                        uint cell_size[],
+                                       uint board_size[],
                                        uint ghost_size,
                                        char **init_cell_board,
                                        MPI_Comm *cartesian_topology) {
+    m_proc_id = proc_id;
+
     m_cell_base[0] = cell_base[0];
     m_cell_base[1] = cell_base[1];
-    uint nrow = m_cell_size[0] = cell_size[0];
-    uint ncol = m_cell_size[1] = cell_size[1];
-    uint k = m_ghost_size = ghost_size;
+    m_cell_size[0] = cell_size[0];
+    m_cell_size[1] = cell_size[1];
+    m_board_size[0] = board_size[0];
+    m_board_size[1] = board_size[1];
+    m_ghost_size = ghost_size;
+    
+    uint nrow = m_cell_size[0];
+    uint ncol = m_cell_size[1];
+    uint k = m_ghost_size;
 
     for (uint m = 0; m < 2; m++) {
         m_cell_board[m] = new bool*[nrow+2*k];
@@ -143,6 +152,15 @@ CartesianCellBoard::CartesianCellBoard(uint proc_id,
     my_right_ghost = new bool[k * nrow];
     my_up_ghost    = new bool[k * (ncol+2*k)];
     my_down_ghost  = new bool[k * (ncol+2*k)];
+
+    for (int i = 0; i < k*nrow; i++) {
+            my_left_ghost[i] = 0;
+            my_right_ghost[i] = 0;
+    }
+    for (int i = 0; i < k*(ncol+2*k); i++) {
+        my_up_ghost[i] = 0;
+        my_down_ghost[i] = 0;
+    }
 }
 
 CartesianCellBoard::~CartesianCellBoard() {
@@ -163,6 +181,8 @@ CartesianCellBoard::~CartesianCellBoard() {
 }
 
 void CartesianCellBoard::cycle() {
+    // std::cout << "Process ID " << m_proc_id << " : cycle() = " << m_cycle << "\n";
+
     int nrow = m_cell_size[0];
     int ncol = m_cell_size[1];
     int k = m_ghost_size;
@@ -182,17 +202,18 @@ void CartesianCellBoard::cycle() {
         }
         int left_proc, right_proc;
         MPI_Cart_shift(*m_cartesian_topology, 1, 1, &left_proc, &right_proc);
-        MPI_Sendrecv(other_left_ghost, k*nrow, MPI_C_BOOL, left_proc, tag,
-                     my_left_ghost,    k*nrow, MPI_C_BOOL, m_proc_id, tag, 
+        // std::cout << "Process ID " << m_proc_id << " : (LeftProc, RightProc) = (" << left_proc << ", " << right_proc << ")\n";
+        MPI_Sendrecv(other_left_ghost, k*nrow, MPI_C_BOOL, right_proc, tag, // Send my right-border to right-proc's left-ghost
+                     my_left_ghost,    k*nrow, MPI_C_BOOL, left_proc,  tag, // Receive my left-ghost from left-proc's right-border
                      *m_cartesian_topology, MPI_STATUS_IGNORE);
-        MPI_Sendrecv(other_right_ghost, k*nrow, MPI_C_BOOL, right_proc, tag,
-                     my_right_ghost,    k*nrow, MPI_C_BOOL, m_proc_id,  tag,
+        MPI_Sendrecv(other_right_ghost, k*nrow, MPI_C_BOOL, left_proc,  tag,
+                     my_right_ghost,    k*nrow, MPI_C_BOOL, right_proc, tag,
                      *m_cartesian_topology, MPI_STATUS_IGNORE);
         for (int i = k; i < nrow+k; i++) {
             for (int j = 0; j < k; j++)
                 m_cell_board[_cur][i][j] = my_left_ghost[(i-k)*k+j];
             for (int j = ncol+k; j < ncol+2*k; j++)
-                m_cell_board[_cur][i][j] = my_left_ghost[(i-k)*k+(j-ncol-k)];
+                m_cell_board[_cur][i][j] = my_right_ghost[(i-k)*k+(j-ncol-k)];
         }
 
         // Send-Receive Vertically
@@ -204,11 +225,12 @@ void CartesianCellBoard::cycle() {
         }
         int up_proc, down_proc;
         MPI_Cart_shift(*m_cartesian_topology, 0, 1, &up_proc, &down_proc);
-        MPI_Sendrecv(other_up_ghost, k*nrow, MPI_C_BOOL, up_proc,   tag,
-                     my_up_ghost,    k*nrow, MPI_C_BOOL, m_proc_id, tag, 
+        // std::cout << "Process ID " << m_proc_id << " : (UpProc, DownProc) = (" << up_proc << ", " << down_proc << ")\n";
+        MPI_Sendrecv(other_up_ghost, k*(ncol+2*k), MPI_C_BOOL, down_proc, tag,
+                     my_up_ghost,    k*(ncol+2*k), MPI_C_BOOL, up_proc,   tag, 
                      *m_cartesian_topology, MPI_STATUS_IGNORE);
-        MPI_Sendrecv(other_down_ghost, k*nrow, MPI_C_BOOL, down_proc, tag,
-                     my_down_ghost,    k*nrow, MPI_C_BOOL, m_proc_id, tag,
+        MPI_Sendrecv(other_down_ghost, k*(ncol+2*k), MPI_C_BOOL, up_proc,   tag,
+                     my_down_ghost,    k*(ncol+2*k), MPI_C_BOOL, down_proc, tag,
                      *m_cartesian_topology, MPI_STATUS_IGNORE);
         for (int j = 0; j < ncol+2*k; j++) {
             for (int i = 0; i < k; i++)

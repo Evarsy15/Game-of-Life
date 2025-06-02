@@ -1,6 +1,6 @@
 import os
 
-exe_list = ['conway_single']
+exe_list = ['conway_2d_mesh']
 num_proc = 4
 
 if __name__ == '__main__':

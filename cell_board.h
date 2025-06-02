@@ -42,6 +42,7 @@ public:
     CartesianCellBoard(uint proc_id,
                        uint cell_base[], 
                        uint cell_size[],
+                       uint board_size[],
                        uint ghost_size,
                        char **init_cell_board,
                        MPI_Comm *cartesian_topology);
@@ -50,6 +51,7 @@ public:
     void cycle();
     void print() {}
     bool **get_board_status() { return m_cell_board[(m_cycle % 2)]; }
+    bool **get_board_status(int gen) { return m_cell_board[gen % 2]; }
 
     // void get_horizontal_ghosts(bool *left_ghost, bool *right_ghost);
     // void get_vertical_ghosts(bool *up_ghost, bool *down_ghost);
@@ -57,6 +59,7 @@ public:
 private:
     uint m_cell_base[2];
     uint m_cell_size[2];    // Row, Col
+    uint m_board_size[2];   // Global Board Size
     uint m_ghost_size;
     bool **m_cell_board[2]; // Visible Board Status
     uint m_cycle;
@@ -76,12 +79,12 @@ private:
     bool is_out_of_border(int i, int j) {
         int i_glob = i - m_ghost_size + m_cell_base[0];
         int j_glob = j - m_ghost_size + m_cell_base[1];
-        return (i_glob < 0 || i_glob >= m_cell_size[0])
-            || (j_glob < 0 || j_glob >= m_cell_size[1]);
+        return (i_glob < 0 || i_glob >= m_board_size[0])
+            || (j_glob < 0 || j_glob >= m_board_size[1]);
     }
     bool is_update_cycle() {
-        return false;
-        // return (m_ghost_size == 1 || m_cycle % m_ghost_size == 0);
+        // return false;
+        return (m_ghost_size == 1 || m_cycle % m_ghost_size == 0);
     }
 
     bool *other_left_ghost;

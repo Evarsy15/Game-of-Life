@@ -7,3 +7,4 @@ mini_project_3.tar.gz
 mpi_hello_world
 mpi_hello_world.cc
 *.txt
+!sample/*.txt
